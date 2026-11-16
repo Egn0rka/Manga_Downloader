@@ -1,4 +1,4 @@
-# Manga_Loder
+# Manga_DownLoder
 A Python desktop application for quickly scanning and multithreaded downloading of manga, manhwa, and webtoons.(created primarily with the help of AI)
 ## Supported Websites
 
