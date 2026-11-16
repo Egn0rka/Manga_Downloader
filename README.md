@@ -18,7 +18,7 @@ A Python desktop application for quickly scanning and multithreaded downloading 
 1. select the desired title and go to the “Chapters” tab
 2. copy the URL and paste it into the corresponding field in the program
 3. select the desired chapters (or specify the desired range of chapters) and the translation command, then click “Download Selected Chapters” 
-*For webtoon.xyz and manga18fx.com
+* For webtoon.xyz and manga18fx.com
 1.Select a title
 2.Copy the URL and paste it into the corresponding field in the program
 3.Select the chapters you want (or specify the range of chapters) and the translation command, then click “Download Selected Chapters”
