@@ -1,0 +1,4 @@
+requests
+DrissionPage
+rich
+PySide6
