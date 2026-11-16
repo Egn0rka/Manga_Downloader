@@ -14,25 +14,29 @@ A Python desktop application for quickly scanning and multithreaded downloading 
 * **Multilingual interface:** Ukrainian, English, Russian (stored in `settings.json`).
 
 ## How to use 
-* For .lib
 
-  1.Select the desired title and go to the “Chapters” tab 
-  2.Copy the URL and paste it into the corresponding field in the program
-  3.Select the desired chapters (or specify the desired range of chapters) and the translation command, then click “Download Selected Chapters”
-   
-* For webtoon.xyz and manga18fx.com
+### For `.lib` sites (MangaLib, HentaiLib, SlashLib, etc.)
+1. Open the desired title and go to the **Chapters** tab.
+2. Copy the URL and paste it into the **URL** field in the program, then click **Get Chapters**.
+3. Select the translation team (branch) and the desired chapters (or enter a range like `10-20`), then click **Download Selected Chapters**.
 
-  1.Select a title
-  2.Copy the URL and paste it into the corresponding field in the program
-  3.Select the chapters you want (or specify the range of chapters) and the translation command, then click “Download Selected Chapters”
+### For `webtoon.xyz` and `manga18fx.com`
+1. Open the desired title page.
+2. Copy the URL and paste it into the **URL** field in the program, then click **Get Chapters**.
+3. Select the chapters you want (or enter a range), then click **Download Selected Chapters**.
+
 
 ![Main window](screenshots/main_window.png)
+*Main application window*
 
 ![Search for chapters](screenshots/search_for_chapters.png)
+*Chapter scanning and translator branch selection*
 
 ![Download confirmation](screenshots/download_confirmation.png)
+*Download Progress & Confirmation*
 
 ![Uploaded to folders](screenshots/uploaded_to_folders.png)
+*Organized Output Folders*
 
 ## Project Structure
 
