@@ -15,13 +15,13 @@ A Python desktop application for quickly scanning and multithreaded downloading 
 
 ## How to use 
 * For .lib
-  1. Select the desired title and go to the “Chapters” tab
-  2. Copy the URL and paste it into the corresponding field in the program
-  3. Select the desired chapters (or specify the desired range of chapters) and the translation command, then click “Download Selected Chapters” 
+  Select the desired title and go to the “Chapters” tab
+  Copy the URL and paste it into the corresponding field in the program
+  Select the desired chapters (or specify the desired range of chapters) and the translation command, then click “Download Selected Chapters” 
 * For webtoon.xyz and manga18fx.com
-  1. Select a title
-  2. Copy the URL and paste it into the corresponding field in the program
-  3. Select the chapters you want (or specify the range of chapters) and the translation command, then click “Download Selected Chapters”
+  Select a title
+  Copy the URL and paste it into the corresponding field in the program
+  Select the chapters you want (or specify the range of chapters) and the translation command, then click “Download Selected Chapters”
 
 ![Main window](screenshots/main_window.png)
 
