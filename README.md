@@ -1,4 +1,4 @@
-<img width="999" height="775" alt="search for chapters" src="https://github.com/user-attachments/assets/9fb2bf28-1755-4cbd-aa75-0580024010b2" /><img width="999" height="775" alt="search for chapters" src="https://github.com/user-attachments/assets/fbba95af-1bc7-40cb-85ef-05b19cfc6d5e" /># Manga_Loder
+# Manga_Loder
 A Python desktop application for quickly scanning and multithreaded downloading of manga, manhwa, and webtoons.(created primarily with the help of AI)
 ## Supported Websites
 
@@ -24,8 +24,11 @@ A Python desktop application for quickly scanning and multithreaded downloading 
 3.Select the chapters you want (or specify the range of chapters) and the translation command, then click “Download Selected Chapters”
 
 ![Main window](screenshots/main_window.png)
+
 ![Search for chapters](screenshots/search_for_chapters.png)
+
 ![Download confirmation](screenshots/download_confirmation.png)
+
 ![Uploaded to folders](screenshots/uploaded_to_folders.png)
 
 ## Project Structure
