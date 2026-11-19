@@ -16,7 +16,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from PySide6.QtCore import Qt, QThread, Signal, QUrl
-from PySide6.QtGui import QDesktopServices, QColor, QTextCursor
+from PySide6.QtGui import QDesktopServices, QColor, QTextCursor, QBrush
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -128,12 +128,12 @@ QPushButton#DangerBtn {
 QPushButton#DangerBtn:hover {
     background-color: #b91c1c;
 }
-QPushButton#AuthBtn {
+QPushButton#AuthBtn, QPushButton#WarnBtn {
     background-color: #d97706;
     border-color: #f59e0b;
     color: #ffffff;
 }
-QPushButton#AuthBtn:hover {
+QPushButton#AuthBtn:hover, QPushButton#WarnBtn:hover {
     background-color: #b45309;
 }
 QListWidget {
@@ -190,6 +190,7 @@ class BrowserWorker(QThread):
     chapter_progress = Signal(int, int, str)     # (current_idx, total_chapters, label)
     page_progress = Signal(int, int)             # (done_pages, total_pages)
     auth_required = Signal()
+    download_report = Signal(dict)               # summary report dict
     task_finished = Signal(str)                  # ("scan" | "download" | "stopped" | "error")
     busy_changed = Signal(bool)
 
@@ -352,6 +353,38 @@ class BrowserWorker(QThread):
 
         self.task_finished.emit("scan")
 
+    def _emit_log_summary(
+        self,
+        total_chapters: int,
+        succeeded_count: int,
+        failed_entries: list[dict],
+        separate_by_branch: bool,
+        stopped: bool
+    ):
+        self.log_signal.emit(tr("report_header"), "info")
+        if stopped:
+            self.log_signal.emit(
+                tr("report_stats_stopped", succeeded=succeeded_count, total=total_chapters),
+                "warn"
+            )
+        else:
+            self.log_signal.emit(
+                tr("report_stats_ok", succeeded=succeeded_count, total=total_chapters),
+                "success" if not failed_entries else "warn"
+            )
+
+        if failed_entries:
+            self.log_signal.emit(tr("report_failed_count", failed=len(failed_entries)), "error")
+            for idx, entry in enumerate(failed_entries, 1):
+                ch = entry["chapter"]
+                team_display = core.resolve_team_display_name(ch)
+                team_tag = f" [{team_display}]" if separate_by_branch and team_display else ""
+                label = tr("chapter_label", num=ch['num'], vol=ch['vol'], team_tag=team_tag)
+                reason = tr(entry["reason_key"], **entry["reason_kwargs"])
+                self.log_signal.emit(f"  {idx}. {label} — {reason}", "error")
+
+        self.log_signal.emit(tr("report_footer"), "info")
+
     def _handle_download(self, chapters: list[dict], save_dir: str, separate_by_branch: bool):
         if not chapters:
             self.task_finished.emit("download")
@@ -363,11 +396,23 @@ class BrowserWorker(QThread):
             return
 
         total_chapters = len(chapters)
+        succeeded_count = 0
+        failed_entries: list[dict] = []
+
         self.log_signal.emit(tr("log_start_download", total=total_chapters), "info")
 
         for idx, ch in enumerate(chapters, 1):
             if self.stop_event.is_set():
                 self.log_signal.emit(tr("log_download_stopped"), "warn")
+                self._emit_log_summary(total_chapters, succeeded_count, failed_entries, separate_by_branch, stopped=True)
+                self.download_report.emit({
+                    "total": total_chapters,
+                    "succeeded": succeeded_count,
+                    "failed_entries": failed_entries,
+                    "stopped": True,
+                    "save_dir": save_dir,
+                    "separate_by_branch": separate_by_branch
+                })
                 self.task_finished.emit("stopped")
                 return
 
@@ -383,7 +428,7 @@ class BrowserWorker(QThread):
             )
 
             branch_folder = team_display if separate_by_branch else ""
-            core.download_single_chapter(
+            result = core.download_single_chapter(
                 self.page,
                 self.session,
                 ch["url"],
@@ -395,16 +440,57 @@ class BrowserWorker(QThread):
                 stop_event=self.stop_event
             )
 
+            if result.get("status") == "stopped" or self.stop_event.is_set():
+                self.log_signal.emit(tr("log_download_stopped"), "warn")
+                self._emit_log_summary(total_chapters, succeeded_count, failed_entries, separate_by_branch, stopped=True)
+                self.download_report.emit({
+                    "total": total_chapters,
+                    "succeeded": succeeded_count,
+                    "failed_entries": failed_entries,
+                    "stopped": True,
+                    "save_dir": save_dir,
+                    "separate_by_branch": separate_by_branch
+                })
+                self.task_finished.emit("stopped")
+                return
+
+            if result.get("ok"):
+                succeeded_count += 1
+            else:
+                reason_key = result.get("reason_key", "fail_reason_unknown")
+                reason_kwargs = result.get("reason_kwargs", {})
+                reason_text = tr(reason_key, **reason_kwargs)
+                self.log_signal.emit(
+                    tr("log_chapter_failed_item", label=label, reason=reason_text),
+                    "error"
+                )
+                failed_entries.append({
+                    "chapter": ch,
+                    "status": result.get("status", "failed"),
+                    "reason_key": reason_key,
+                    "reason_kwargs": reason_kwargs,
+                    "saved": result.get("saved", 0),
+                    "expected": result.get("expected", 0)
+                })
+
             self.chapter_progress.emit(idx, total_chapters, f"[{idx}/{total_chapters}] {label}")
 
             if idx < total_chapters and not self.stop_event.is_set():
                 time.sleep(random.uniform(0.6, 1.2))
 
-        if not self.stop_event.is_set():
+        self._emit_log_summary(total_chapters, succeeded_count, failed_entries, separate_by_branch, stopped=False)
+        if not failed_entries:
             self.log_signal.emit(tr("log_all_done"), "success")
-            self.task_finished.emit("download")
-        else:
-            self.task_finished.emit("stopped")
+
+        self.download_report.emit({
+            "total": total_chapters,
+            "succeeded": succeeded_count,
+            "failed_entries": failed_entries,
+            "stopped": False,
+            "save_dir": save_dir,
+            "separate_by_branch": separate_by_branch
+        })
+        self.task_finished.emit("download")
 
 
 class MainWindow(QMainWindow):
@@ -414,6 +500,9 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(840, 610)
 
         self.chapters_data: list[dict] = []
+        self.failed_entries: list[dict] = []
+        self.last_download_save_dir: str = ""
+        self.last_download_separate: bool = False
         self.has_multiple_branches: bool = False
         self.current_status_key: str = "status_idle"
         self.custom_status_active: bool = False
@@ -555,6 +644,10 @@ class MainWindow(QMainWindow):
         self.branch_hint_lbl = QLabel("")
         self.branch_hint_lbl.setObjectName("SubtitleLabel")
 
+        self.retry_failed_btn = QPushButton()
+        self.retry_failed_btn.setObjectName("WarnBtn")
+        self.retry_failed_btn.setVisible(False)
+
         self.download_selected_btn = QPushButton()
         self.download_selected_btn.setObjectName("SuccessBtn")
         self.download_selected_btn.setEnabled(False)
@@ -566,6 +659,7 @@ class MainWindow(QMainWindow):
         action_row.addWidget(self.branch_hint_lbl)
         action_row.addStretch()
         action_row.addWidget(self.stop_btn)
+        action_row.addWidget(self.retry_failed_btn)
         action_row.addWidget(self.download_selected_btn)
         chapters_layout.addLayout(action_row)
 
@@ -611,6 +705,7 @@ class MainWindow(QMainWindow):
         self.scan_btn.clicked.connect(self.on_scan_clicked)
         self.direct_dl_btn.clicked.connect(self.on_direct_download_clicked)
         self.download_selected_btn.clicked.connect(self.on_download_selected_clicked)
+        self.retry_failed_btn.clicked.connect(self.on_retry_failed_clicked)
         self.stop_btn.clicked.connect(self.on_stop_clicked)
         self.auth_btn.clicked.connect(self.on_confirm_auth_clicked)
 
@@ -626,6 +721,7 @@ class MainWindow(QMainWindow):
         self.worker.chapter_progress.connect(self.update_chapter_progress)
         self.worker.page_progress.connect(self.update_page_progress)
         self.worker.auth_required.connect(self.on_auth_required)
+        self.worker.download_report.connect(self.on_download_report)
         self.worker.task_finished.connect(self.on_task_finished)
         self.worker.busy_changed.connect(self.set_busy_state)
 
@@ -661,6 +757,7 @@ class MainWindow(QMainWindow):
         self.deselect_all_btn.setText(tr("btn_deselect_all"))
 
         self.download_selected_btn.setText(tr("btn_dl_selected"))
+        self.retry_failed_btn.setText(tr("btn_retry_failed", count=len(self.failed_entries)))
         self.stop_btn.setText(tr("btn_stop"))
 
         self.chapters_progress_bar.setFormat(tr("prog_chapters"))
@@ -672,7 +769,6 @@ class MainWindow(QMainWindow):
         if not self.custom_status_active:
             self.ch_status_lbl.setText(tr(self.current_status_key))
 
-        # Оновлюємо підписи гілок і глав без втрати поточного вибору та чекбоксів
         self._refresh_localized_lists()
 
     def _refresh_localized_lists(self):
@@ -716,15 +812,32 @@ class MainWindow(QMainWindow):
         else:
             self.branch_hint_lbl.setText("")
 
+        failed_by_url = {e["chapter"]["url"]: e for e in self.failed_entries}
+
         self.chapters_list_widget.blockSignals(True)
         for i in range(self.chapters_list_widget.count()):
             item = self.chapters_list_widget.item(i)
             ch = item.data(Qt.UserRole)
             team_name = core.resolve_team_display_name(ch)
-            item.setText(tr("chapter_item", vol=ch['vol'], num=ch['num'], team=team_name))
+            base_text = tr("chapter_item", vol=ch['vol'], num=ch['num'], team=team_name)
+            fail_entry = failed_by_url.get(ch["url"])
+            if fail_entry:
+                reason = tr(fail_entry["reason_key"], **fail_entry["reason_kwargs"])
+                item.setText(f"{base_text}  ⚠")
+                item.setForeground(QBrush(QColor("#fca5a5")))
+                item.setToolTip(tr("tip_failed_chapter", reason=reason))
+            else:
+                item.setText(base_text)
+                item.setForeground(QBrush(QColor("#e4e6eb")))
+                item.setToolTip("")
         self.chapters_list_widget.blockSignals(False)
 
         self._update_selected_counter()
+
+    def _clear_failed_state(self):
+        self.failed_entries = []
+        self.retry_failed_btn.setVisible(False)
+        self._refresh_localized_lists()
 
     def _set_status_key(self, key: str):
         self.current_status_key = key
@@ -778,6 +891,8 @@ class MainWindow(QMainWindow):
 
         self.chapters_list_widget.clear()
         self.chapters_data = []
+        self.failed_entries = []
+        self.retry_failed_btn.setVisible(False)
         self.has_multiple_branches = False
         self._refresh_localized_lists()
 
@@ -796,6 +911,7 @@ class MainWindow(QMainWindow):
             )
             return
 
+        self._clear_failed_state()
         save_dir = self.dir_input.text().strip() or self.default_save_dir
         _, ch_slug = core.parse_slugs(url)
         if core.is_madara_site(url):
@@ -807,6 +923,8 @@ class MainWindow(QMainWindow):
 
     def populate_chapters(self, chapters: list[dict]):
         self.chapters_data = chapters
+        self.failed_entries = []
+        self.retry_failed_btn.setVisible(False)
 
         branch_counts: Counter = Counter()
         branch_labels: dict[str, str] = {}
@@ -958,12 +1076,98 @@ class MainWindow(QMainWindow):
         if not selected:
             return
 
+        self._clear_failed_state()
         save_dir = self.dir_input.text().strip() or self.default_save_dir
         self.worker.enqueue_download(
             selected,
             save_dir,
             separate_by_branch=self.has_multiple_branches
         )
+
+    def on_retry_failed_clicked(self):
+        if not self.failed_entries:
+            return
+
+        chapters_to_retry = [entry["chapter"] for entry in self.failed_entries]
+        save_dir = self.last_download_save_dir or self.dir_input.text().strip() or self.default_save_dir
+        separate_by_branch = self.last_download_separate
+
+        self.append_log(tr("log_retrying_failed", count=len(chapters_to_retry)), "warn")
+        self.retry_failed_btn.setVisible(False)
+        self.worker.enqueue_download(
+            chapters_to_retry,
+            save_dir,
+            separate_by_branch=separate_by_branch
+        )
+
+    def on_download_report(self, report: dict):
+        failed_entries = report.get("failed_entries", [])
+        total = report.get("total", 0)
+        succeeded = report.get("succeeded", 0)
+        stopped = report.get("stopped", False)
+
+        self.failed_entries = failed_entries
+        self.last_download_save_dir = report.get("save_dir", "")
+        self.last_download_separate = report.get("separate_by_branch", False)
+
+        self._refresh_localized_lists()
+
+        if not failed_entries:
+            self.retry_failed_btn.setVisible(False)
+            return
+
+        self.retry_failed_btn.setText(tr("btn_retry_failed", count=len(failed_entries)))
+        self.retry_failed_btn.setVisible(True)
+
+        # Позначаємо у списку чекбоксами лише невдалі глави, щоб їх одразу було видно
+        failed_urls = {e["chapter"]["url"] for e in failed_entries}
+        if self.chapters_list_widget.count() > 0:
+            self.chapters_list_widget.blockSignals(True)
+            for i in range(self.chapters_list_widget.count()):
+                item = self.chapters_list_widget.item(i)
+                ch = item.data(Qt.UserRole)
+                item.setCheckState(Qt.Checked if ch["url"] in failed_urls else Qt.Unchecked)
+            self.chapters_list_widget.blockSignals(False)
+            self._update_selected_counter()
+
+        # Формуємо діалогове вікно звіту з кнопкою миттєвого повтору
+        if stopped:
+            header_line = tr("report_stats_stopped", succeeded=succeeded, total=total)
+        else:
+            header_line = tr("report_stats_ok", succeeded=succeeded, total=total)
+
+        lines = [
+            header_line,
+            "",
+            tr("report_failed_count", failed=len(failed_entries))
+        ]
+
+        max_preview = 15
+        for idx, entry in enumerate(failed_entries[:max_preview], 1):
+            ch = entry["chapter"]
+            team_display = core.resolve_team_display_name(ch)
+            team_tag = f" [{team_display}]" if self.last_download_separate and team_display else ""
+            label = tr("chapter_label", num=ch['num'], vol=ch['vol'], team_tag=team_tag)
+            reason = tr(entry["reason_key"], **entry["reason_kwargs"])
+            lines.append(f"{idx}. {label} — {reason}")
+
+        if len(failed_entries) > max_preview:
+            lines.append(tr("report_more_items", count=len(failed_entries) - max_preview))
+
+        lines.append("")
+        lines.append(tr("dlg_report_retry_prompt"))
+
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Warning)
+        msg_box.setWindowTitle(tr("dlg_report_title"))
+        msg_box.setText("\n".join(lines))
+
+        retry_btn = msg_box.addButton(tr("btn_retry_now"), QMessageBox.AcceptRole)
+        msg_box.addButton(tr("btn_close"), QMessageBox.RejectRole)
+        msg_box.exec()
+
+        if msg_box.clickedButton() == retry_btn:
+            self.on_retry_failed_clicked()
 
     def on_stop_clicked(self):
         self.append_log(tr("log_sending_stop"), "warn")
@@ -1007,7 +1211,9 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(busy)
         if busy:
             self.download_selected_btn.setEnabled(False)
+            self.retry_failed_btn.setEnabled(False)
         else:
+            self.retry_failed_btn.setEnabled(bool(self.failed_entries))
             self._update_selected_counter()
 
     def on_task_finished(self, kind: str):
