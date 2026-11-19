@@ -17,9 +17,7 @@ LIB_SOCIAL_KEYWORDS = [
     "hentailib",
     "slashlib",
     "shlib",
-    "yaoilib",
-    "ranobelib",
-    "animelib",
+    "yaoilib",  
     "lib.social"
 ]
 
@@ -797,7 +795,7 @@ def _extract_chapters_madara(page, url: str, on_log=None, stop_event: threading.
                     for (const el of allEls) {
                         if (el.children.length > 2) continue;
                         const style = window.getComputedStyle(el);
-                        if (style.display === 'none' || style.visibility === 'hidden') continue;
+                        if (style.display === 'none' || style.visibility !== 'hidden') continue;
 
                         const rawTxt = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
                         const beforeTxt = (window.getComputedStyle(el, '::before').content || '').replace(/["']/g, '').trim().toLowerCase();
@@ -1137,6 +1135,7 @@ def download_image(
     if stop_event and stop_event.is_set():
         return False
 
+    tmp_filepath = ""
     try:
         ext = url.split('.')[-1].split('?')[0]
         if len(ext) > 4 or not ext.isalnum():
@@ -1144,6 +1143,7 @@ def download_image(
 
         filename = f"{index:03d}.{ext}"
         filepath = os.path.join(folder_path, filename)
+        tmp_filepath = filepath + ".part"
 
         if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
             if on_page_done:
@@ -1158,17 +1158,27 @@ def download_image(
         response = session.get(url, stream=True, timeout=15)
         response.raise_for_status()
 
-        with open(filepath, 'wb') as f:
+        with open(tmp_filepath, 'wb') as f:
             for chunk in response.iter_content(1024 * 64):
                 if stop_event and stop_event.is_set():
+                    f.close()
+                    if os.path.exists(tmp_filepath):
+                        os.remove(tmp_filepath)
                     return False
                 if chunk:
                     f.write(chunk)
+
+        os.replace(tmp_filepath, filepath)
 
         if on_page_done:
             on_page_done(True)
         return True
     except Exception:
+        if tmp_filepath and os.path.exists(tmp_filepath):
+            try:
+                os.remove(tmp_filepath)
+            except Exception:
+                pass
         if on_page_done:
             on_page_done(False)
         return False
@@ -1209,7 +1219,7 @@ def download_single_chapter(
     on_page_done=None,
     on_log=None,
     stop_event: threading.Event | None = None
-) -> bool:
+) -> dict:
     def log(msg, level="info"):
         if on_log:
             on_log(msg, level)
@@ -1228,6 +1238,7 @@ def download_single_chapter(
     dir_ready = False
     submitted_count = 0
     completed_count = 0
+    saved_count = 0
     known_total = 0
     lock = threading.Lock()
     workers = 10 if is_madara_site(ch_url) else 5
@@ -1245,10 +1256,12 @@ def download_single_chapter(
                     on_total_pages(max(known_total, submitted_count))
                 notify_progress()
 
-        def handle_page_finished(_ok: bool):
-            nonlocal completed_count
+        def handle_page_finished(ok: bool):
+            nonlocal completed_count, saved_count
             with lock:
                 completed_count += 1
+                if ok:
+                    saved_count += 1
                 notify_progress()
 
         def handle_new_image(idx: int, img_url: str):
@@ -1282,14 +1295,49 @@ def download_single_chapter(
             )
         except PermissionError as e:
             log(tr("log_perm_err", err=e), "error")
-            return False
+            return {
+                "ok": False,
+                "status": "failed",
+                "reason_key": "fail_reason_perm",
+                "reason_kwargs": {"err": str(e)},
+                "saved": 0,
+                "expected": 0,
+                "save_dir": save_dir
+            }
         except Exception as e:
             log(tr("log_chapter_proc_err", url=ch_url, err=e), "error")
-            return False
+            return {
+                "ok": False,
+                "status": "failed",
+                "reason_key": "fail_reason_exception",
+                "reason_kwargs": {"err": str(e)},
+                "saved": 0,
+                "expected": 0,
+                "save_dir": save_dir
+            }
+
+        if stop_event and stop_event.is_set():
+            return {
+                "ok": False,
+                "status": "stopped",
+                "reason_key": "",
+                "reason_kwargs": {},
+                "saved": saved_count,
+                "expected": max(known_total, submitted_count),
+                "save_dir": save_dir
+            }
 
         if not images:
             log(tr("log_no_images_found", url=ch_url), "error")
-            return False
+            return {
+                "ok": False,
+                "status": "failed",
+                "reason_key": "fail_reason_no_images",
+                "reason_kwargs": {},
+                "saved": 0,
+                "expected": 0,
+                "save_dir": save_dir
+            }
 
         with lock:
             if on_total_pages:
@@ -1297,10 +1345,74 @@ def download_single_chapter(
             notify_progress()
 
     if stop_event and stop_event.is_set():
-        return False
+        return {
+            "ok": False,
+            "status": "stopped",
+            "reason_key": "",
+            "reason_kwargs": {},
+            "saved": saved_count,
+            "expected": max(known_total, submitted_count),
+            "save_dir": save_dir
+        }
+
+    expected_total = max(known_total, submitted_count)
+
+    if saved_count == 0:
+        reason_kwargs = {"total": expected_total}
+        log(tr("fail_reason_zero_saved", **reason_kwargs), "error")
+        return {
+            "ok": False,
+            "status": "failed",
+            "reason_key": "fail_reason_zero_saved",
+            "reason_kwargs": reason_kwargs,
+            "saved": 0,
+            "expected": expected_total,
+            "save_dir": save_dir
+        }
+
+    if saved_count < submitted_count:
+        reason_kwargs = {
+            "saved": saved_count,
+            "total": expected_total,
+            "failed": submitted_count - saved_count
+        }
+        log(tr("fail_reason_http_pages", **reason_kwargs), "warn")
+        return {
+            "ok": False,
+            "status": "partial",
+            "reason_key": "fail_reason_http_pages",
+            "reason_kwargs": reason_kwargs,
+            "saved": saved_count,
+            "expected": expected_total,
+            "save_dir": save_dir
+        }
+
+    if known_total > 0 and submitted_count < known_total:
+        reason_kwargs = {
+            "saved": saved_count,
+            "total": known_total
+        }
+        log(tr("fail_reason_slow_load", **reason_kwargs), "warn")
+        return {
+            "ok": False,
+            "status": "partial",
+            "reason_key": "fail_reason_slow_load",
+            "reason_kwargs": reason_kwargs,
+            "saved": saved_count,
+            "expected": known_total,
+            "save_dir": save_dir
+        }
 
     log(tr("log_downloaded_to", path=save_dir), "success")
-    return True
+    return {
+        "ok": True,
+        "status": "ok",
+        "reason_key": "",
+        "reason_kwargs": {},
+        "saved": saved_count,
+        "expected": expected_total,
+        "save_dir": save_dir
+    }
 
 
 def filter_chapters_by_range(
