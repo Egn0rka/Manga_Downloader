@@ -428,12 +428,17 @@ class BrowserWorker(QThread):
             )
 
             branch_folder = team_display if separate_by_branch else ""
+            chapter_slug_override = ""
+            if core.is_senkuro_site(ch["url"]) and ch.get("vol") not in ("", "?") and ch.get("num") not in ("", "?"):
+                chapter_slug_override = f"v{ch['vol']}-c{ch['num']}"
+
             result = core.download_single_chapter(
                 self.page,
                 self.session,
                 ch["url"],
                 save_dir,
                 branch_folder=branch_folder,
+                chapter_slug_override=chapter_slug_override,
                 on_total_pages=lambda tot: self.page_progress.emit(0, tot),
                 on_page_done=lambda done, tot: self.page_progress.emit(done, tot),
                 on_log=self.log_signal.emit,
@@ -725,6 +730,19 @@ class MainWindow(QMainWindow):
         self.worker.task_finished.connect(self.on_task_finished)
         self.worker.busy_changed.connect(self.set_busy_state)
 
+    def _has_branch_selector(self) -> bool:
+        """Повертає True лише для сайтів, де є інформація про гілки/команди перекладу."""
+        if not self.chapters_data:
+            return False
+        return any(not ch.get("is_default_team", False) for ch in self.chapters_data)
+
+    def _format_chapter_list_item(self, ch: dict, show_team: bool) -> str:
+        if show_team:
+            team_name = core.resolve_team_display_name(ch)
+            return tr("chapter_item", vol=ch['vol'], num=ch['num'], team=team_name)
+        base = tr("chapter_item", vol=ch['vol'], num=ch['num'], team="")
+        return base.replace("   []", "").replace("[]", "").strip()
+
     def _on_language_changed(self):
         lang_code = self.lang_combo.currentData()
         if not lang_code:
@@ -777,9 +795,15 @@ class MainWindow(QMainWindow):
             self.branch_combo.clear()
             self.branch_combo.addItem(tr("all_translators", count=0), None)
             self.branch_combo.blockSignals(False)
+            self.branch_lbl.setVisible(True)
+            self.branch_combo.setVisible(True)
             self.branch_hint_lbl.setText("")
             self._update_selected_counter()
             return
+
+        show_branches = self._has_branch_selector()
+        self.branch_lbl.setVisible(show_branches)
+        self.branch_combo.setVisible(show_branches)
 
         current_branch_key = self.branch_combo.currentData()
 
@@ -792,7 +816,7 @@ class MainWindow(QMainWindow):
                 branch_labels[b_key] = core.resolve_team_display_name(ch)
 
         sorted_branches = branch_counts.most_common()
-        self.has_multiple_branches = len(sorted_branches) > 1
+        self.has_multiple_branches = show_branches and len(sorted_branches) > 1
 
         self.branch_combo.blockSignals(True)
         self.branch_combo.clear()
@@ -803,8 +827,11 @@ class MainWindow(QMainWindow):
                 b_key
             )
 
-        restored_idx = self.branch_combo.findData(current_branch_key)
-        self.branch_combo.setCurrentIndex(restored_idx if restored_idx >= 0 else 0)
+        if show_branches:
+            restored_idx = self.branch_combo.findData(current_branch_key)
+            self.branch_combo.setCurrentIndex(restored_idx if restored_idx >= 0 else 0)
+        else:
+            self.branch_combo.setCurrentIndex(0)
         self.branch_combo.blockSignals(False)
 
         if self.has_multiple_branches:
@@ -818,8 +845,7 @@ class MainWindow(QMainWindow):
         for i in range(self.chapters_list_widget.count()):
             item = self.chapters_list_widget.item(i)
             ch = item.data(Qt.UserRole)
-            team_name = core.resolve_team_display_name(ch)
-            base_text = tr("chapter_item", vol=ch['vol'], num=ch['num'], team=team_name)
+            base_text = self._format_chapter_list_item(ch, show_team=show_branches)
             fail_entry = failed_by_url.get(ch["url"])
             if fail_entry:
                 reason = tr(fail_entry["reason_key"], **fail_entry["reason_kwargs"])
@@ -926,6 +952,10 @@ class MainWindow(QMainWindow):
         self.failed_entries = []
         self.retry_failed_btn.setVisible(False)
 
+        show_branches = self._has_branch_selector()
+        self.branch_lbl.setVisible(show_branches)
+        self.branch_combo.setVisible(show_branches)
+
         branch_counts: Counter = Counter()
         branch_labels: dict[str, str] = {}
         for ch in chapters:
@@ -935,7 +965,7 @@ class MainWindow(QMainWindow):
                 branch_labels[b_key] = core.resolve_team_display_name(ch)
 
         sorted_branches = branch_counts.most_common()
-        self.has_multiple_branches = len(sorted_branches) > 1
+        self.has_multiple_branches = show_branches and len(sorted_branches) > 1
 
         self.branch_combo.blockSignals(True)
         self.branch_combo.clear()
@@ -959,8 +989,7 @@ class MainWindow(QMainWindow):
         self.chapters_list_widget.clear()
 
         for ch in chapters:
-            team_name = core.resolve_team_display_name(ch)
-            item = QListWidgetItem(tr("chapter_item", vol=ch['vol'], num=ch['num'], team=team_name))
+            item = QListWidgetItem(self._format_chapter_list_item(ch, show_team=show_branches))
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
 
             if self.has_multiple_branches:
@@ -976,7 +1005,7 @@ class MainWindow(QMainWindow):
         self._on_branch_filter_changed()
 
     def _on_branch_filter_changed(self):
-        selected_branch = self.branch_combo.currentData()
+        selected_branch = self.branch_combo.currentData() if self._has_branch_selector() else None
         for i in range(self.chapters_list_widget.count()):
             item = self.chapters_list_widget.item(i)
             ch = item.data(Qt.UserRole)
@@ -1001,7 +1030,7 @@ class MainWindow(QMainWindow):
         if not expr or not self.chapters_data:
             return
 
-        selected_branch = self.branch_combo.currentData()
+        selected_branch = self.branch_combo.currentData() if self._has_branch_selector() else None
         if self.has_multiple_branches and selected_branch is None:
             QMessageBox.information(
                 self,
@@ -1119,7 +1148,6 @@ class MainWindow(QMainWindow):
         self.retry_failed_btn.setText(tr("btn_retry_failed", count=len(failed_entries)))
         self.retry_failed_btn.setVisible(True)
 
-        # Позначаємо у списку чекбоксами лише невдалі глави, щоб їх одразу було видно
         failed_urls = {e["chapter"]["url"] for e in failed_entries}
         if self.chapters_list_widget.count() > 0:
             self.chapters_list_widget.blockSignals(True)
@@ -1130,7 +1158,6 @@ class MainWindow(QMainWindow):
             self.chapters_list_widget.blockSignals(False)
             self._update_selected_counter()
 
-        # Формуємо діалогове вікно звіту з кнопкою миттєвого повтору
         if stopped:
             header_line = tr("report_stats_stopped", succeeded=succeeded, total=total)
         else:
