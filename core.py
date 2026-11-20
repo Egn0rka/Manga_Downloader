@@ -17,7 +17,9 @@ LIB_SOCIAL_KEYWORDS = [
     "hentailib",
     "slashlib",
     "shlib",
-    "yaoilib",  
+    "yaoilib",
+    "ranobelib",
+    "animelib",
     "lib.social"
 ]
 
@@ -26,14 +28,18 @@ MADARA_KEYWORDS = [
     "webtoon.xyz"
 ]
 
-SUPPORTED_KEYWORDS = LIB_SOCIAL_KEYWORDS + MADARA_KEYWORDS
+SENKURO_DOMAINS = [
+    "senkuro.com",
+    "senkognito.com"
+]
+
+SUPPORTED_KEYWORDS = LIB_SOCIAL_KEYWORDS + MADARA_KEYWORDS + SENKURO_DOMAINS
 AGE_RESTRICTED_KEYWORDS = ["hentai", "slash", "shlib", "yaoi"]
 
 
-def is_supported_url(url: str) -> bool:
-    parsed = urlparse(url)
-    netloc = parsed.netloc.lower()
-    return any(kw in netloc for kw in SUPPORTED_KEYWORDS)
+def is_senkuro_site(url: str) -> bool:
+    netloc = urlparse(url).netloc.lower()
+    return any(netloc == d or netloc.endswith("." + d) for d in SENKURO_DOMAINS)
 
 
 def is_madara_site(url: str) -> bool:
@@ -41,14 +47,24 @@ def is_madara_site(url: str) -> bool:
     return any(kw in netloc for kw in MADARA_KEYWORDS)
 
 
+def is_supported_url(url: str) -> bool:
+    if is_senkuro_site(url) or is_madara_site(url):
+        return True
+    netloc = urlparse(url).netloc.lower()
+    return any(kw in netloc for kw in LIB_SOCIAL_KEYWORDS)
+
+
 def is_chapter_url(url: str) -> bool:
+    path = urlparse(url).path.lower()
+    if is_senkuro_site(url):
+        return bool(re.search(r'/chapters/\d+', path))
     if is_madara_site(url):
-        return "/chapter-" in urlparse(url).path.lower()
+        return "/chapter-" in path
     return "/read/" in url
 
 
 def requires_age_verification(url: str) -> bool:
-    if is_madara_site(url):
+    if is_madara_site(url) or is_senkuro_site(url):
         return False
     domain = urlparse(url).netloc.lower()
     return any(k in domain for k in AGE_RESTRICTED_KEYWORDS)
@@ -114,11 +130,11 @@ def create_http_session(page, domain: str) -> requests.Session:
 def bypass_age_warning(page):
     try:
         clicked = page.run_js(r"""
-            const keys = ["мені є 18", "мне есть 18", "вход", "да"];
+            const keys = ["мені є 18", "мне есть 18", "да, мне есть 18", "вход", "да"];
             const btns = Array.from(document.querySelectorAll('button'));
             for (const btn of btns) {
-                const txt = (btn.innerText || "").toLowerCase();
-                if (keys.some(k => txt.includes(k))) {
+                const txt = (btn.innerText || "").trim().toLowerCase();
+                if (txt && txt.length <= 35 && keys.some(k => txt === k || txt.includes("есть 18") || txt.includes("є 18"))) {
                     btn.click();
                     return true;
                 }
@@ -143,7 +159,7 @@ def _make_chapter_entry(vol: str, ch_num: str, url: str, bid: str = "", team: st
         num_float = 0.0
 
     raw_team = (team or "").strip()
-    is_default_team = not raw_team
+    is_default_team = not raw_team and not bid
     if raw_team:
         clean_team = raw_team
     elif bid:
@@ -179,11 +195,10 @@ def resolve_team_display_name(ch: dict) -> str:
 
 
 # ==============================================================================
-# ОРИГІНАЛЬНА ЛОГІКА ДЛЯ LIB.SOCIAL (MANGALIB / HENTAILIB / SLASHLIB)
+# ЛОГІКА ДЛЯ LIB.SOCIAL (MANGALIB / HENTAILIB / SLASHLIB)
 # ==============================================================================
 
 def _extract_chapters_lib(page, url: str, on_log=None, stop_event: threading.Event | None = None):
-    """Отримує список усіх глав та гілок перекладу з головної сторінки тайтлу."""
     def log(msg, level="info"):
         if on_log:
             on_log(msg, level)
@@ -311,6 +326,7 @@ def _extract_chapters_lib(page, url: str, on_log=None, stop_event: threading.Eve
                     if (/^(том|volume|vol\.?)\s*\d+/i.test(s)) return true;
                     if (/^(глава|chapter|ch\.?)\s*[\d\.]+/i.test(s)) return true;
                     if (/^\d{1,2}\.\d{1,2}\.\d{2,4}$/.test(s)) return true;
+                    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return true;
                     if (/^\d+\s*(сек|мин|хв|час|год|дн|нед|тиж|мес|міс|рік|рок)/i.test(s)) return true;
                     if (/^(читать|читати|read|скачать|завантажити|в закладки)$/i.test(s)) return true;
                     return false;
@@ -716,7 +732,7 @@ def _extract_images_lib(
 
 
 # ==============================================================================
-# ОРИГІНАЛЬНА ЛОГІКА ДЛЯ MADARA (MANGA18FX.COM ТА WEBTOON.XYZ — МИТТЄВИЙ РЕЖИМ)
+# ЛОГІКА ДЛЯ MADARA (MANGA18FX.COM ТА WEBTOON.XYZ — МИТТЄВИЙ РЕЖИМ)
 # ==============================================================================
 
 def _set_madara_load_mode(page, enabled: bool):
@@ -795,7 +811,7 @@ def _extract_chapters_madara(page, url: str, on_log=None, stop_event: threading.
                     for (const el of allEls) {
                         if (el.children.length > 2) continue;
                         const style = window.getComputedStyle(el);
-                        if (style.display === 'none' || style.visibility !== 'hidden') continue;
+                        if (style.display === 'none' || style.visibility === 'hidden') continue;
 
                         const rawTxt = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
                         const beforeTxt = (window.getComputedStyle(el, '::before').content || '').replace(/["']/g, '').trim().toLowerCase();
@@ -1088,10 +1104,525 @@ def _extract_images_madara(
 
 
 # ==============================================================================
+# ЛОГІКА ДЛЯ SENKURO.COM ТА SENKOGNITO.COM
+# (ЄДИНИЙ СПИСОК ГЛАВ БЕЗ РОЗБИТТЯ ЗА ДАТАМИ + КОНТРОЛЬ МЕЖІ ГЛАВИ)
+# ==============================================================================
+
+def _normalize_senkuro_title_url(url: str) -> str:
+    parsed = urlparse(url)
+    path = parsed.path.rstrip('/')
+    if re.search(r'/manga/[^/]+$', path):
+        path = path + '/chapters'
+    return parsed._replace(path=path, query='', fragment='').geturl()
+
+
+def _normalize_senkuro_chapter_url(url: str) -> str:
+    parsed = urlparse(url)
+    path = parsed.path.rstrip('/')
+    match = re.search(r'^(/manga/[^/]+/chapters/\d+)', path)
+    if match:
+        path = match.group(1) + '/pages/1'
+    return parsed._replace(path=path, query='', fragment='').geturl()
+
+
+def _extract_chapters_senkuro(page, url: str, on_log=None, stop_event: threading.Event | None = None):
+    def log(msg, level="info"):
+        if on_log:
+            on_log(msg, level)
+
+    target_url = _normalize_senkuro_title_url(url)
+    log(tr("log_goto_title", url=target_url), "info")
+    try:
+        page.get(target_url)
+    except Exception as e:
+        log(tr("log_page_load_err", err=e), "error")
+        return []
+
+    if stop_event and stop_event.is_set():
+        return []
+
+    bypass_age_warning(page)
+    time.sleep(1.2)
+    log(tr("log_getting_chapters"), "info")
+
+    parsed_base = urlparse(target_url)
+    base_origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
+
+    try:
+        page.scroll.to_top()
+    except Exception:
+        pass
+    time.sleep(0.4)
+
+    seen_chapters: dict[str, dict] = {}
+    same_pos_count = 0
+
+    for _ in range(180):
+        if stop_event and stop_event.is_set():
+            log(tr("log_scan_stopped"), "warn")
+            break
+
+        try:
+            step_data = page.run_js(r"""
+                const prevY = window.scrollY;
+                const prevH = document.body ? document.body.scrollHeight : 0;
+
+                const items = [];
+                const links = Array.from(document.querySelectorAll('a[href*="/chapters/"]'));
+                for (const a of links) {
+                    const rawHref = a.getAttribute('href') || a.href || '';
+                    const m = rawHref.match(/\/manga\/([^\/]+)\/chapters\/(\d+)/);
+                    if (!m) continue;
+
+                    const fullText = (a.innerText || a.textContent || '').trim();
+                    const lines = fullText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+                    let vol = '1';
+                    let num = '';
+
+                    for (const line of lines) {
+                        // Ігноруємо дати публікації (напр. 2026-10-17 або 17.10.2026)
+                        if (/^\d{4}-\d{2}-\d{2}$/.test(line) || /^\d{1,2}\.\d{1,2}\.\d{2,4}$/.test(line)) {
+                            continue;
+                        }
+
+                        const volMatch = line.match(/(?:том|vol\.?|volume)\s*(\d+(?:\.\d+)?)/i);
+                        if (volMatch) vol = volMatch[1];
+
+                        const chMatch = line.match(/(?:глава|ch\.?|chapter)\s*(\d+(?:\.\d+)?)/i);
+                        if (chMatch) {
+                            num = chMatch[1];
+                        } else if (!num && /^\d+(?:\.\d+)?$/.test(line)) {
+                            num = line;
+                        }
+                    }
+
+                    if (!num) {
+                        const titleAttr = a.getAttribute('title') || '';
+                        const tMatch = titleAttr.match(/(?:глава|ch\.?|chapter)\s*(\d+(?:\.\d+)?)/i);
+                        if (tMatch) num = tMatch[1];
+                        const vMatch = titleAttr.match(/(?:том|vol\.?|volume)\s*(\d+(?:\.\d+)?)/i);
+                        if (vMatch) vol = vMatch[1];
+                    }
+
+                    items.push({
+                        slug: m[1],
+                        chapterId: m[2],
+                        vol: vol,
+                        num: num || '0'
+                    });
+                }
+
+                window.scrollBy(0, Math.max(Math.round(window.innerHeight * 1.6), 1200));
+
+                return {
+                    items: items,
+                    moved: Math.abs(window.scrollY - prevY) > 2 || (document.body ? document.body.scrollHeight : 0) !== prevH
+                };
+            """) or {}
+
+            for item in step_data.get('items', []):
+                ch_id = item.get('chapterId', '')
+                slug = item.get('slug', '')
+                if not ch_id or not slug:
+                    continue
+
+                ch_url = f"{base_origin}/manga/{slug}/chapters/{ch_id}/pages/1"
+                if ch_url not in seen_chapters:
+                    # На Senkuro / Senkognito немає вибору гілок перекладу — зберігаємо єдиним списком
+                    seen_chapters[ch_url] = _make_chapter_entry(
+                        vol=item.get('vol', '1'),
+                        ch_num=item.get('num', '0'),
+                        url=ch_url,
+                        bid="",
+                        team=""
+                    )
+
+            if step_data.get('moved'):
+                same_pos_count = 0
+                time.sleep(random.uniform(0.18, 0.28))
+            else:
+                same_pos_count += 1
+                if same_pos_count >= 6:
+                    break
+                time.sleep(0.25)
+        except Exception:
+            break
+
+    chapters_list = list(seen_chapters.values())
+    chapters_list.sort(key=lambda x: (x['vol_float'], x['num_float']))
+    return chapters_list
+
+
+def _try_extract_senkuro_api(page, target_chapter_id: str) -> list[str]:
+    """Шукає сторінки конкретної глави за її chapter_id у Nuxt 3 payload/state без скролу."""
+    if not target_chapter_id:
+        return []
+    try:
+        raw_urls = page.run_js(r"""
+            const targetId = String(arguments[0]);
+            const visited = new WeakSet();
+            let foundPages = null;
+
+            function searchObj(obj, depth) {
+                if (!obj || typeof obj !== 'object' || depth > 12 || foundPages) return;
+                if (visited.has(obj)) return;
+                visited.add(obj);
+
+                if (String(obj.id || '') === targetId && Array.isArray(obj.pages) && obj.pages.length > 0) {
+                    foundPages = obj.pages;
+                    return;
+                }
+
+                if (Array.isArray(obj)) {
+                    for (let i = 0; i < obj.length; i++) {
+                        searchObj(obj[i], depth + 1);
+                        if (foundPages) return;
+                    }
+                } else {
+                    for (const key of Object.keys(obj)) {
+                        searchObj(obj[key], depth + 1);
+                        if (foundPages) return;
+                    }
+                }
+            }
+
+            try {
+                if (window.__NUXT__) searchObj(window.__NUXT__, 0);
+            } catch (e) {}
+
+            try {
+                if (!foundPages && window.useNuxtApp) {
+                    const nuxt = window.useNuxtApp();
+                    if (nuxt && nuxt.payload) searchObj(nuxt.payload, 0);
+                }
+            } catch (e) {}
+
+            if (!foundPages) return [];
+
+            const sorted = foundPages.slice().sort((a, b) => {
+                const na = Number(a && (a.number ?? a.index ?? 0));
+                const nb = Number(b && (b.number ?? b.index ?? 0));
+                return na - nb;
+            });
+
+            return sorted.map(p => {
+                if (!p) return '';
+                if (typeof p === 'string') return p;
+                if (p.image) {
+                    if (typeof p.image === 'string') return p.image;
+                    if (p.image.original && p.image.original.url) return p.image.original.url;
+                    if (p.image.url) return p.image.url;
+                }
+                return p.url || p.src || '';
+            }).filter(Boolean);
+        """, target_chapter_id) or []
+    except Exception:
+        raw_urls = []
+
+    images = []
+    for src in raw_urls:
+        src = src.strip()
+        if src.startswith('//'):
+            src = 'https:' + src
+        if src.startswith('http') and src not in images:
+            images.append(src)
+    return images
+
+
+ATOMIC_SCAN_SENKURO_JS = r"""
+const targetChapterId = String(arguments[0]);
+const doScroll = Boolean(arguments[1]);
+
+const prevY = window.scrollY;
+const prevHeight = document.body ? document.body.scrollHeight : 0;
+const currentPath = window.location.pathname || '';
+
+// 1. Перевірка, чи URL ще належить поточній главі (Senkuro при автопідвантаженні змінює URL на ID наступної глави)
+const pathChapterMatch = currentPath.match(/\/chapters\/(\d+)/);
+const currentChapterId = pathChapterMatch ? pathChapterMatch[1] : targetChapterId;
+const urlSwitchedToNext = Boolean(targetChapterId && currentChapterId !== targetChapterId);
+
+function resolveUrl(raw) {
+    if (!raw) return '';
+    raw = raw.trim();
+    if (!raw || raw.startsWith('data:')) return '';
+    try {
+        return new URL(raw, document.baseURI).href;
+    } catch (e) {
+        return raw;
+    }
+}
+
+function pickBestSrc(img) {
+    const srcset = img.getAttribute('srcset') || img.getAttribute('data-srcset') || '';
+    if (srcset) {
+        const candidates = srcset.split(',')
+            .map(s => s.trim().split(/\s+/)[0])
+            .filter(Boolean);
+        if (candidates.length > 0) {
+            return resolveUrl(candidates[candidates.length - 1]);
+        }
+    }
+    const raw = img.getAttribute('data-src')
+        || img.getAttribute('data-original')
+        || img.getAttribute('data-lazy-src')
+        || img.getAttribute('src')
+        || '';
+    return resolveUrl(raw);
+}
+
+// 2. Пошук першої межі кінця глави в DOM ("Над главой работали", "Следующая >", або посилання на іншу главу)
+let boundaryEl = null;
+const allAnchors = Array.from(document.querySelectorAll('a[href*="/chapters/"]'));
+for (const a of allAnchors) {
+    const href = a.getAttribute('href') || '';
+    const m = href.match(/\/chapters\/(\d+)/);
+    if (m && m[1] !== targetChapterId) {
+        boundaryEl = a;
+        break;
+    }
+}
+
+if (!boundaryEl) {
+    const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_ELEMENT);
+    let node;
+    while ((node = walker.nextNode())) {
+        if (node.children.length > 3) continue;
+        const txt = (node.innerText || '').trim().toLowerCase();
+        if (txt === 'над главой работали' || txt === 'к тайтлу' || txt.startsWith('следующая')) {
+            boundaryEl = node;
+            break;
+        }
+    }
+}
+
+// 3. Збір зображень ТІЛЬКИ ДО межі кінця глави (DOCUMENT_POSITION_PRECEDING)
+const allImgs = Array.from(document.querySelectorAll('img'));
+const validUrls = [];
+
+for (const img of allImgs) {
+    if (img.closest('header, nav, aside, footer, [role="dialog"]')) continue;
+    if (boundaryEl) {
+        const pos = boundaryEl.compareDocumentPosition(img);
+        if (!(pos & Node.DOCUMENT_POSITION_PRECEDING)) {
+            continue;
+        }
+    }
+    if (img.complete && img.naturalWidth > 0 && img.naturalWidth < 250) continue;
+    const url = pickBestSrc(img);
+    if (url) {
+        validUrls.push(url);
+    }
+}
+
+// 4. Зчитування індикатора сторінок (наприклад "1/21" праворуч), поки URL ще на поточній главі
+let totalPages = 0;
+if (!urlSwitchedToNext && document.body) {
+    const sideNodes = Array.from(document.querySelectorAll('div, span, p, button'));
+    for (const el of sideNodes) {
+        if (el.children.length > 2) continue;
+        const t = (el.innerText || '').trim();
+        const m = t.match(/^(\d+)\s*\/\s*(\d+)$/);
+        if (m) {
+            const cur = parseInt(m[1], 10);
+            const tot = parseInt(m[2], 10);
+            if (cur >= 1 && cur <= tot && tot >= 1 && tot <= 500) {
+                totalPages = tot;
+                break;
+            }
+        }
+    }
+}
+
+// Перевірка, чи межа вже в межах видимості або вище (тобто ми дійшли до кінця глави)
+let reachedBoundary = false;
+if (boundaryEl) {
+    const rect = boundaryEl.getBoundingClientRect();
+    if (rect.top <= window.innerHeight + 120) {
+        reachedBoundary = true;
+    }
+}
+
+if (doScroll && !urlSwitchedToNext && !reachedBoundary) {
+    const step = Math.max(Math.round(window.innerHeight * 0.85), 750);
+    window.scrollBy(0, step);
+}
+
+return {
+    imgs: validUrls,
+    totalPages: totalPages,
+    urlSwitchedToNext: urlSwitchedToNext,
+    reachedBoundary: reachedBoundary,
+    prevY: prevY,
+    newY: window.scrollY,
+    prevHeight: prevHeight,
+    newHeight: document.body ? document.body.scrollHeight : 0
+};
+"""
+
+
+def _detect_senkuro_chapter_slug(page, fallback_id: str) -> str:
+    """Зчитує 'Том X Глава Y' із заголовка читалки Senkuro для формування назви папки vX-cY."""
+    try:
+        header_txt = page.run_js(r"""
+            const els = Array.from(document.querySelectorAll('header *, nav *, a, span, h1, h2, div'));
+            for (const el of els) {
+                if (el.children.length > 2) continue;
+                const t = (el.innerText || '').trim();
+                if (/(?:том|vol\.?)\s*\d+.*(?:глава|ch\.?)\s*\d+/i.test(t) && t.length < 60) {
+                    return t;
+                }
+            }
+            return document.title || '';
+        """) or ""
+        vol_m = re.search(r'(?:том|vol\.?|volume)\s*(\d+(?:\.\d+)?)', header_txt, re.IGNORECASE)
+        ch_m = re.search(r'(?:глава|ch\.?|chapter)\s*(\d+(?:\.\d+)?)', header_txt, re.IGNORECASE)
+        if ch_m:
+            vol = vol_m.group(1) if vol_m else "1"
+            num = ch_m.group(1)
+            return f"v{vol}-c{num}"
+    except Exception:
+        pass
+    return f"ch-{fallback_id}"
+
+
+def _extract_images_senkuro(
+    page,
+    url: str,
+    on_new_image=None,
+    on_total_pages=None,
+    on_log=None,
+    stop_event: threading.Event | None = None
+):
+    def log(msg, level="info"):
+        if on_log:
+            on_log(msg, level)
+
+    target_url = _normalize_senkuro_chapter_url(url)
+    id_match = re.search(r'/chapters/(\d+)', urlparse(target_url).path)
+    target_chapter_id = id_match.group(1) if id_match else ""
+
+    log(tr("log_goto_chapter", url=target_url), "info")
+    try:
+        page.get(target_url)
+    except Exception as e:
+        log(tr("log_reader_open_err", err=e), "error")
+        return []
+
+    if stop_event and stop_event.is_set():
+        return []
+
+    bypass_age_warning(page)
+    log(tr("log_getting_pages"), "info")
+
+    bad_keywords = [
+        'avatar', 'cover', 'thumb', 'logo', 'icon',
+        'banner', 'ads.', 'data:image'
+    ]
+
+    # Спосіб 1: Спроба отримати масив сторінок конкретної глави з Nuxt 3 state
+    for _ in range(12):
+        if stop_event and stop_event.is_set():
+            return []
+        time.sleep(0.2)
+        api_imgs = _try_extract_senkuro_api(page, target_chapter_id)
+        if len(api_imgs) > 0:
+            log(tr("log_senkuro_api_found", count=len(api_imgs)), "success")
+            if on_total_pages:
+                on_total_pages(len(api_imgs))
+            if on_new_image:
+                for idx, img_url in enumerate(api_imgs, 1):
+                    on_new_image(idx, img_url)
+            return api_imgs
+
+    # Спосіб 2: Контрольований скрол із жорсткою фіксацією межі поточної глави
+    log(tr("log_turbo_scan"), "warn")
+    try:
+        page.scroll.to_top()
+    except Exception:
+        pass
+
+    images: list[str] = []
+    total_pages = 0
+    same_bottom_count = 0
+    boundary_retries = 0
+
+    def collect_filtered(raw_list: list[str]):
+        for src in raw_list:
+            if src.startswith('//'):
+                src = 'https:' + src
+            if src.startswith('http') and src not in images:
+                src_lower = src.lower()
+                if not any(bad in src_lower for bad in bad_keywords):
+                    images.append(src)
+                    if on_new_image:
+                        on_new_image(len(images), src)
+
+    for _ in range(500):
+        if stop_event and stop_event.is_set():
+            log(tr("log_chapter_scan_aborted"), "warn")
+            break
+
+        prev_len = len(images)
+        try:
+            state = page.run_js(ATOMIC_SCAN_SENKURO_JS, target_chapter_id, True) or {}
+        except Exception:
+            break
+
+        if total_pages == 0 and state.get('totalPages', 0) > 0:
+            total_pages = state['totalPages']
+            log(tr("log_total_pages", total=total_pages), "info")
+            if on_total_pages:
+                on_total_pages(total_pages)
+
+        collect_filtered(state.get('imgs', []))
+
+        if total_pages > 0 and len(images) >= total_pages:
+            log(tr("log_collected_all_pages", count=len(images)), "success")
+            break
+
+        url_switched = state.get('urlSwitchedToNext', False)
+        reached_boundary = state.get('reachedBoundary', False)
+
+        if url_switched or reached_boundary:
+            if total_pages > 0 and len(images) < total_pages and boundary_retries < 12:
+                boundary_retries += 1
+                if boundary_retries % 3 == 1:
+                    log(tr("log_waiting_pages", cur=len(images), total=total_pages), "warn")
+                try:
+                    page.run_js('window.scrollBy(0, -500);')
+                except Exception:
+                    pass
+                time.sleep(0.3)
+                continue
+
+            log(tr("log_senkuro_boundary", count=len(images)), "info")
+            break
+
+        moved = abs(state.get('newY', 0) - state.get('prevY', 0)) > 2
+        grew = state.get('newHeight', 0) > state.get('prevHeight', 0)
+        got_new = len(images) > prev_len
+
+        if moved or grew or got_new:
+            same_bottom_count = 0
+            time.sleep(random.uniform(0.18, 0.28))
+        else:
+            same_bottom_count += 1
+            if same_bottom_count >= 10:
+                break
+            time.sleep(0.25)
+
+    return images
+
+
+# ==============================================================================
 # МАРШРУТИЗАЦІЯ ТА ЗАВАНТАЖЕННЯ
 # ==============================================================================
 
 def extract_chapters_from_main_page(page, url: str, on_log=None, stop_event: threading.Event | None = None):
+    if is_senkuro_site(url):
+        return _extract_chapters_senkuro(page, url, on_log=on_log, stop_event=stop_event)
     if is_madara_site(url):
         return _extract_chapters_madara(page, url, on_log=on_log, stop_event=stop_event)
     return _extract_chapters_lib(page, url, on_log=on_log, stop_event=stop_event)
@@ -1105,6 +1636,15 @@ def extract_images_from_reader(
     on_log=None,
     stop_event: threading.Event | None = None
 ):
+    if is_senkuro_site(url):
+        return _extract_images_senkuro(
+            page,
+            url,
+            on_new_image=on_new_image,
+            on_total_pages=on_total_pages,
+            on_log=on_log,
+            stop_event=stop_event
+        )
     if is_madara_site(url):
         return _extract_images_madara(
             page,
@@ -1188,6 +1728,11 @@ def parse_slugs(url: str):
     parsed = urlparse(url)
     parts = [p for p in parsed.path.strip('/').split('/') if p]
 
+    if is_senkuro_site(url):
+        manga_slug = parts[1] if len(parts) > 1 and parts[0].lower() == 'manga' else (parts[0] if parts else "manga")
+        ch_id = parts[3] if len(parts) > 3 and parts[2].lower() == 'chapters' else "chapter"
+        return manga_slug, f"id-{ch_id}"
+
     if is_madara_site(url):
         if parts and parts[0].lower() in ('manga', 'read', 'webtoon', 'manhwa', 'manhua'):
             manga_slug = parts[1] if len(parts) > 1 else "manga"
@@ -1215,6 +1760,7 @@ def download_single_chapter(
     ch_url: str,
     base_save_dir: str,
     branch_folder: str = "",
+    chapter_slug_override: str = "",
     on_total_pages=None,
     on_page_done=None,
     on_log=None,
@@ -1224,16 +1770,20 @@ def download_single_chapter(
         if on_log:
             on_log(msg, level)
 
-    manga_slug, chapter_slug = parse_slugs(ch_url)
-    if branch_folder:
-        save_dir = os.path.join(
-            base_save_dir,
-            manga_slug,
-            sanitize_folder_name(branch_folder),
-            chapter_slug
-        )
-    else:
-        save_dir = os.path.join(base_save_dir, manga_slug, chapter_slug)
+    manga_slug, parsed_chapter_slug = parse_slugs(ch_url)
+    chapter_slug = chapter_slug_override or parsed_chapter_slug
+
+    def resolve_save_dir(current_ch_slug: str) -> str:
+        if branch_folder:
+            return os.path.join(
+                base_save_dir,
+                manga_slug,
+                sanitize_folder_name(branch_folder),
+                current_ch_slug
+            )
+        return os.path.join(base_save_dir, manga_slug, current_ch_slug)
+
+    save_dir = resolve_save_dir(chapter_slug)
 
     dir_ready = False
     submitted_count = 0
@@ -1265,9 +1815,13 @@ def download_single_chapter(
                 notify_progress()
 
         def handle_new_image(idx: int, img_url: str):
-            nonlocal dir_ready, submitted_count
+            nonlocal dir_ready, submitted_count, chapter_slug, save_dir
             with lock:
                 if not dir_ready:
+                    if not chapter_slug_override and is_senkuro_site(ch_url) and chapter_slug.startswith("id-"):
+                        fallback_id = chapter_slug[3:]
+                        chapter_slug = _detect_senkuro_chapter_slug(page, fallback_id)
+                        save_dir = resolve_save_dir(chapter_slug)
                     os.makedirs(save_dir, exist_ok=True)
                     dir_ready = True
                 submitted_count += 1
