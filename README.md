@@ -3,7 +3,7 @@ A Python desktop application for quickly scanning and multithreaded downloading 
 ## Supported Websites
 
 * **Homeland Lib.Social:** MangaLib, HentaiLib, SlashLib, YaoiLib
-* **Other platforms:** Manga18FX, Webtoon.xyz
+* **Other platforms:** Manga18FX, Webtoon.xyz, Senkuro.com|Senkognito.com
 
 ## Features
 
@@ -15,7 +15,7 @@ A Python desktop application for quickly scanning and multithreaded downloading 
 
 ## How to use 
 
-### For `.lib` sites (MangaLib, HentaiLib, SlashLib, etc.)
+### For `.lib` sites (MangaLib, HentaiLib, SlashLib | Senkoro)
 1. Open the desired title and go to the **Chapters** tab.
 2. Copy the URL and paste it into the **URL** field in the program, then click **Get Chapters**.
 3. Select the translation team (branch) and the desired chapters (or enter a range like `10-20`), then click **Download Selected Chapters**.
@@ -45,9 +45,9 @@ A Python desktop application for quickly scanning and multithreaded downloading 
 * `i18n.py` — translation dictionaries and language settings storage.
 * `requirements.txt` — a list of libraries required to run the project from source code.
 
-## Running the Pre-built Build (.exe)
+## Running the Pre-built Build 
 
-1. Go to the **Releases** section of this repository and download the `.exe` file.
+1. Go to the **Releases** section of this repository and download the `.exe` file (or linux file with the inscription "for.arch")
 2. Make sure you have **Google Chrome** or **Microsoft Edge** installed on your PC (required for `DrissionPage` to work).
 3. Run the `.exe` file. A `Downloads` folder and a `settings.json` configuration file will be created automatically next to the executable file.
 
