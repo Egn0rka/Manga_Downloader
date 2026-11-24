@@ -15,12 +15,12 @@ A Python desktop application for quickly scanning and multithreaded downloading 
 
 ## How to use 
 
-### For `.lib` sites (MangaLib, HentaiLib, SlashLib | Senkoro)
+### For `.lib` sites (MangaLib, HentaiLib, SlashLib) | `Senkoro` | `Mangadex`
 1. Open the desired title and go to the **Chapters** tab.
 2. Copy the URL and paste it into the **URL** field in the program, then click **Get Chapters**.
 3. Select the translation team (branch) and the desired chapters (or enter a range like `10-20`), then click **Download Selected Chapters**.
 
-### For `webtoon.xyz` and `manga18fx.com`
+### For `webtoon.xyz`,`manga18fx.com`.
 1. Open the desired title page.
 2. Copy the URL and paste it into the **URL** field in the program, then click **Get Chapters**.
 3. Select the chapters you want (or enter a range), then click **Download Selected Chapters**.
