@@ -19,7 +19,7 @@ LANGUAGES = {
 TRANSLATIONS: dict[str, dict[str, str]] = {
     "uk": {
         "app_title": "Manga_Downloader",
-        "subtitle": "MangaLib • HentaiLib • SlashLib • YaoiLib • Manga18FX • Webtoon.xyz",
+        "subtitle": "MangaLib • Manga18FX • Webtoon.xyz • Senkuro ",
         "lang_label": "Мова:",
         "btn_confirm_auth": "Підтвердити вхід 18+",
         "lbl_url": "Посилання:",
@@ -124,10 +124,17 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "report_stats_stopped": "Операцію зупинено. Успішно завантажено до зупинки: {succeeded} з {total} глав.",
         "report_failed_count": "Не вдалося або завантажено неповністю: {failed} глав:",
         "report_more_items": "  ... та ще {count} глав (повний список у журналі подій).",
+        "subtitle": "MangaLib • Manga18FX • Webtoon.xyz • Senkuro • MangaDex",
+        "dlg_unsupported_msg": "Підтримуються домени сімейства Lib.Social (MangaLib, HentaiLib, SlashLib, YaoiLib), а також Manga18FX, Webtoon.xyz, Senkuro та MangaDex.",
+        "log_mangadex_api_chapters": "Отримання списку глав через MangaDex API...",
+        "log_mangadex_api_pages": "Отримано {count} сторінок в оригінальній якості через MangaDex API.",
+        "log_mangadex_rate_limit": "Перевищено ліміт запитів MangaDex API, очікуємо {sec} с...",
+        "log_mangadex_api_err": "Помилка запиту до MangaDex API: {err}",
+
     },
     "ru": {
         "app_title": "Manga_Downloader",
-        "subtitle": "MangaLib • HentaiLib • SlashLib • YaoiLib • Manga18FX • Webtoon.xyz",
+        "subtitle": "MangaLib •  Manga18FX • Webtoon.xyz • Senkuro ",
         "lang_label": "Язык:",
         "btn_confirm_auth": "Подтвердить вход 18+",
         "lbl_url": "Ссылка:",
@@ -232,10 +239,16 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "report_stats_stopped": "Операция остановлена. Успешно загружено до остановки: {succeeded} из {total} глав.",
         "report_failed_count": "Не удалось или загружено неполностью: {failed} глав:",
         "report_more_items": "  ... и еще {count} глав (полный список в журнале событий).",
+        "subtitle": "MangaLib • Manga18FX • Webtoon.xyz • Senkuro • MangaDex",
+        "dlg_unsupported_msg": "Поддерживаются домены семейства Lib.Social (MangaLib, HentaiLib, SlashLib, YaoiLib), а также Manga18FX, Webtoon.xyz, Senkuro и MangaDex.",
+        "log_mangadex_api_chapters": "Получение списка глав через MangaDex API...",
+        "log_mangadex_api_pages": "Получено {count} страниц в оригинальном качестве через MangaDex API.",
+        "log_mangadex_rate_limit": "Превышен лимит запросов MangaDex API, ожидаем {sec} с...",
+        "log_mangadex_api_err": "Ошибка запроса к MangaDex API: {err}",
     },
     "en": {
         "app_title": "Manga_Downloader",
-        "subtitle": "MangaLib • HentaiLib • SlashLib • YaoiLib • Manga18FX • Webtoon.xyz",
+        "subtitle": "MangaLib • Manga18FX • Webtoon.xyz • Senkuro ",
         "lang_label": "Language:",
         "btn_confirm_auth": "Confirm 18+ Login",
         "lbl_url": "URL:",
@@ -340,6 +353,12 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "report_stats_stopped": "Operation stopped. Successfully downloaded before stop: {succeeded} of {total} chapters.",
         "report_failed_count": "Failed or incomplete chapters: {failed}:",
         "report_more_items": "  ... and {count} more chapters (see full list in the event log).",
+        "subtitle": "MangaLib • Manga18FX • Webtoon.xyz • Senkuro • MangaDex",
+        "dlg_unsupported_msg": "Supported domains include the Lib.Social family (MangaLib, HentaiLib, SlashLib, YaoiLib), as well as Manga18FX, Webtoon.xyz, Senkuro, and MangaDex.",
+        "log_mangadex_api_chapters": "Fetching chapters list via MangaDex API...",
+        "log_mangadex_api_pages": "Fetched {count} original-quality pages via MangaDex API.",
+        "log_mangadex_rate_limit": "MangaDex API rate limit reached, waiting {sec}s...",
+        "log_mangadex_api_err": "MangaDex API request error: {err}",
     },
 }
 
