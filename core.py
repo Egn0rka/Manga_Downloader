@@ -33,8 +33,23 @@ SENKURO_DOMAINS = [
     "senkognito.com"
 ]
 
-SUPPORTED_KEYWORDS = LIB_SOCIAL_KEYWORDS + MADARA_KEYWORDS + SENKURO_DOMAINS
+MANGADEX_DOMAINS = [
+    "mangadex.org"
+]
+
+MANGADEX_API_BASE = "https://api.mangadex.org"
+MANGADEX_UUID_RE = re.compile(
+    r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})',
+    re.IGNORECASE
+)
+
+SUPPORTED_KEYWORDS = LIB_SOCIAL_KEYWORDS + MADARA_KEYWORDS + SENKURO_DOMAINS + MANGADEX_DOMAINS
 AGE_RESTRICTED_KEYWORDS = ["hentai", "slash", "shlib", "yaoi"]
+
+
+def is_mangadex_site(url: str) -> bool:
+    netloc = urlparse(url).netloc.lower()
+    return any(netloc == d or netloc.endswith("." + d) for d in MANGADEX_DOMAINS)
 
 
 def is_senkuro_site(url: str) -> bool:
@@ -48,7 +63,7 @@ def is_madara_site(url: str) -> bool:
 
 
 def is_supported_url(url: str) -> bool:
-    if is_senkuro_site(url) or is_madara_site(url):
+    if is_mangadex_site(url) or is_senkuro_site(url) or is_madara_site(url):
         return True
     netloc = urlparse(url).netloc.lower()
     return any(kw in netloc for kw in LIB_SOCIAL_KEYWORDS)
@@ -56,6 +71,8 @@ def is_supported_url(url: str) -> bool:
 
 def is_chapter_url(url: str) -> bool:
     path = urlparse(url).path.lower()
+    if is_mangadex_site(url):
+        return bool(re.search(r'/chapter/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', path))
     if is_senkuro_site(url):
         return bool(re.search(r'/chapters/\d+', path))
     if is_madara_site(url):
@@ -64,7 +81,7 @@ def is_chapter_url(url: str) -> bool:
 
 
 def requires_age_verification(url: str) -> bool:
-    if is_madara_site(url) or is_senkuro_site(url):
+    if is_mangadex_site(url) or is_madara_site(url) or is_senkuro_site(url):
         return False
     domain = urlparse(url).netloc.lower()
     return any(k in domain for k in AGE_RESTRICTED_KEYWORDS)
@@ -99,8 +116,11 @@ def create_http_session(page, domain: str) -> requests.Session:
     session.mount("http://", adapter)
 
     try:
-        ua = page.run_js("return navigator.userAgent;")
+        ua = page.run_js("return navigator.userAgent;") if page is not None else ""
     except Exception:
+        ua = ""
+
+    if not ua:
         ua = (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -113,16 +133,17 @@ def create_http_session(page, domain: str) -> requests.Session:
         "Accept-Language": "uk-UA,uk;q=0.9,ru;q=0.8,en-US;q=0.7,en;q=0.6"
     })
 
-    try:
-        for cookie in page.cookies():
-            if isinstance(cookie, dict) and "name" in cookie and "value" in cookie:
-                session.cookies.set(
-                    cookie["name"],
-                    cookie["value"],
-                    domain=cookie.get("domain", "")
-                )
-    except Exception:
-        pass
+    if page is not None:
+        try:
+            for cookie in page.cookies():
+                if isinstance(cookie, dict) and "name" in cookie and "value" in cookie:
+                    session.cookies.set(
+                        cookie["name"],
+                        cookie["value"],
+                        domain=cookie.get("domain", "")
+                    )
+        except Exception:
+            pass
 
     return session
 
@@ -192,6 +213,319 @@ def resolve_team_display_name(ch: dict) -> str:
     if bid:
         return tr("branch_numbered", bid=bid)
     return tr("default_branch")
+
+
+# ==============================================================================
+# ЛОГІКА ДЛЯ MANGADEX.ORG (ОФІЦІЙНИЙ REST API — ОРИГІНАЛЬНА ЯКІСТЬ /data/)
+# ==============================================================================
+
+def _extract_mangadex_uuid(url: str, segment: str = "") -> str:
+    path = urlparse(url).path
+    if segment:
+        m = re.search(
+            rf'/{re.escape(segment)}/([0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}})',
+            path,
+            re.IGNORECASE
+        )
+        if m:
+            return m.group(1).lower()
+    m_any = MANGADEX_UUID_RE.search(path)
+    return m_any.group(1).lower() if m_any else ""
+
+
+def _pick_mangadex_title(attributes: dict) -> str:
+    if not isinstance(attributes, dict):
+        return ""
+    title_map = attributes.get("title") or {}
+    if isinstance(title_map, dict):
+        for lang in ("en", "ja-ro", "uk", "ru", "ja", "ko", "zh"):
+            val = (title_map.get(lang) or "").strip()
+            if val:
+                return val
+        for val in title_map.values():
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+
+    alt_titles = attributes.get("altTitles") or []
+    if isinstance(alt_titles, list):
+        for lang in ("en", "ja-ro", "uk", "ru"):
+            for item in alt_titles:
+                if isinstance(item, dict) and item.get(lang):
+                    return str(item[lang]).strip()
+    return ""
+
+
+def _sleep_interruptible(seconds: float, stop_event: threading.Event | None = None):
+    deadline = time.monotonic() + max(0.0, seconds)
+    while time.monotonic() < deadline:
+        if stop_event and stop_event.is_set():
+            return
+        time.sleep(min(0.2, deadline - time.monotonic()))
+
+
+def _mangadex_api_get(
+    session: requests.Session,
+    endpoint_url: str,
+    params: dict | list | None = None,
+    on_log=None,
+    stop_event: threading.Event | None = None
+) -> dict | None:
+    headers = {
+        "User-Agent": "MangaDownloader/1.0 (Python requests)",
+        "Accept": "application/json",
+        "Referer": None,
+    }
+    last_err = ""
+    for attempt in range(4):
+        if stop_event and stop_event.is_set():
+            return None
+        try:
+            resp = session.get(endpoint_url, params=params, headers=headers, timeout=20)
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After") or resp.headers.get("X-RateLimit-Retry-After")
+                try:
+                    wait_sec = max(2.0, min(float(retry_after), 30.0))
+                except (TypeError, ValueError):
+                    wait_sec = 3.0 * (attempt + 1)
+                if on_log:
+                    on_log(tr("log_mangadex_rate_limit", sec=int(round(wait_sec))), "warn")
+                _sleep_interruptible(wait_sec, stop_event)
+                continue
+            if resp.status_code >= 400:
+                last_err = f"HTTP {resp.status_code}: {resp.text[:160].strip()}"
+                if resp.status_code in (400, 403, 404):
+                    break
+                _sleep_interruptible(0.8 * (attempt + 1), stop_event)
+                continue
+            return resp.json()
+        except Exception as e:
+            last_err = str(e)
+            if attempt < 3:
+                _sleep_interruptible(0.8 * (attempt + 1), stop_event)
+
+    if on_log and last_err:
+        on_log(tr("log_mangadex_api_err", err=last_err), "error")
+    return None
+
+
+def _fetch_mangadex_manga_slug(
+    session: requests.Session,
+    url: str,
+    manga_id: str,
+    stop_event: threading.Event | None = None
+) -> str:
+    parts = [p for p in urlparse(url).path.strip('/').split('/') if p]
+    if len(parts) >= 3 and parts[0].lower() == "title" and parts[2].strip():
+        return sanitize_folder_name(parts[2].strip())
+
+    if manga_id:
+        data = _mangadex_api_get(session, f"{MANGADEX_API_BASE}/manga/{manga_id}", stop_event=stop_event)
+        if isinstance(data, dict) and isinstance(data.get("data"), dict):
+            title = _pick_mangadex_title(data["data"].get("attributes") or {})
+            if title:
+                return sanitize_folder_name(title)
+
+    return sanitize_folder_name(manga_id or "mangadex")
+
+
+def _resolve_mangadex_chapter_meta(
+    session: requests.Session,
+    ch_url: str,
+    stop_event: threading.Event | None = None
+) -> tuple[str, str]:
+    """Повертає (manga_slug, chapter_slug) для прямого посилання на главу MangaDex."""
+    chapter_id = _extract_mangadex_uuid(ch_url, "chapter")
+    if not chapter_id:
+        return "mangadex", "chapter"
+
+    payload = _mangadex_api_get(
+        session,
+        f"{MANGADEX_API_BASE}/chapter/{chapter_id}",
+        params=[("includes[]", "manga")],
+        stop_event=stop_event
+    )
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+        return "mangadex", f"id-{chapter_id[:8]}"
+
+    ch_data = payload["data"]
+    attrs = ch_data.get("attributes") or {}
+    vol = str(attrs.get("volume") or "1").strip() or "1"
+    ch_num = str(attrs.get("chapter") or "0").strip() or "0"
+    chapter_slug = f"v{vol}-c{ch_num}"
+
+    manga_slug = ""
+    for rel in ch_data.get("relationships") or []:
+        if isinstance(rel, dict) and rel.get("type") == "manga":
+            title = _pick_mangadex_title(rel.get("attributes") or {})
+            if title:
+                manga_slug = sanitize_folder_name(title)
+                break
+            if rel.get("id"):
+                manga_slug = sanitize_folder_name(str(rel["id"]))
+
+    return (manga_slug or "mangadex"), chapter_slug
+
+
+def _extract_chapters_mangadex(
+    session: requests.Session,
+    url: str,
+    on_log=None,
+    stop_event: threading.Event | None = None
+) -> list[dict]:
+    def log(msg, level="info"):
+        if on_log:
+            on_log(msg, level)
+
+    manga_id = _extract_mangadex_uuid(url, "title")
+    if not manga_id:
+        log(tr("log_no_chapters"), "error")
+        return []
+
+    log(tr("log_goto_title", url=url), "info")
+    log(tr("log_mangadex_api_chapters"), "info")
+
+    manga_slug = _fetch_mangadex_manga_slug(session, url, manga_id, stop_event=stop_event)
+
+    chapters_list: list[dict] = []
+    seen_ids: set[str] = set()
+    limit = 500
+    offset = 0
+
+    while True:
+        if stop_event and stop_event.is_set():
+            log(tr("log_scan_stopped"), "warn")
+            break
+
+        params = [
+            ("limit", str(limit)),
+            ("offset", str(offset)),
+            ("includes[]", "scanlation_group"),
+            ("includes[]", "user"),
+            ("contentRating[]", "safe"),
+            ("contentRating[]", "suggestive"),
+            ("contentRating[]", "erotica"),
+            ("contentRating[]", "pornographic"),
+            ("order[volume]", "asc"),
+            ("order[chapter]", "asc"),
+        ]
+        payload = _mangadex_api_get(
+            session,
+            f"{MANGADEX_API_BASE}/manga/{manga_id}/feed",
+            params=params,
+            on_log=on_log,
+            stop_event=stop_event
+        )
+        if not isinstance(payload, dict) or payload.get("result") != "ok":
+            break
+
+        items = payload.get("data") or []
+        if not items:
+            break
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            ch_id = str(item.get("id") or "").strip()
+            if not ch_id or ch_id in seen_ids:
+                continue
+
+            attrs = item.get("attributes") or {}
+            # Пропускаємо зовнішні глави (MangaPlus тощо), де немає картинок на серверах MangaDex
+            if attrs.get("externalUrl") or attrs.get("pages") == 0:
+                continue
+
+            seen_ids.add(ch_id)
+            vol = str(attrs.get("volume") or "1").strip() or "1"
+            ch_num = str(attrs.get("chapter") or "0").strip() or "0"
+            lang = (attrs.get("translatedLanguage") or "unk").upper()
+
+            group_names = []
+            uploader_name = ""
+            for rel in item.get("relationships") or []:
+                if not isinstance(rel, dict):
+                    continue
+                rel_type = rel.get("type")
+                rel_attrs = rel.get("attributes") or {}
+                if rel_type == "scanlation_group" and rel_attrs.get("name"):
+                    group_names.append(str(rel_attrs["name"]).strip())
+                elif rel_type == "user" and rel_attrs.get("username") and not uploader_name:
+                    uploader_name = str(rel_attrs["username"]).strip()
+
+            if group_names:
+                translator_label = " & ".join(group_names)
+            elif uploader_name:
+                translator_label = uploader_name
+            else:
+                translator_label = "No Group"
+
+            team_name = f"[{lang}] {translator_label}"
+            ch_url = f"https://mangadex.org/chapter/{ch_id}"
+
+            entry = _make_chapter_entry(vol, ch_num, ch_url, bid="", team=team_name)
+            entry["manga_slug"] = manga_slug
+            entry["chapter_slug"] = f"v{vol}-c{ch_num}"
+            chapters_list.append(entry)
+
+        total = int(payload.get("total") or 0)
+        offset += len(items)
+        if offset >= total:
+            break
+
+        _sleep_interruptible(0.25, stop_event)
+
+    chapters_list.sort(key=lambda x: (x['vol_float'], x['num_float'], x['team']))
+    return chapters_list
+
+
+def _extract_images_mangadex(
+    session: requests.Session,
+    url: str,
+    on_new_image=None,
+    on_total_pages=None,
+    on_log=None,
+    stop_event: threading.Event | None = None
+) -> list[str]:
+    def log(msg, level="info"):
+        if on_log:
+            on_log(msg, level)
+
+    chapter_id = _extract_mangadex_uuid(url, "chapter")
+    if not chapter_id:
+        return []
+
+    log(tr("log_goto_chapter", url=url), "info")
+    log(tr("log_getting_pages"), "info")
+
+    payload = _mangadex_api_get(
+        session,
+        f"{MANGADEX_API_BASE}/at-home/server/{chapter_id}",
+        on_log=on_log,
+        stop_event=stop_event
+    )
+    if not isinstance(payload, dict) or payload.get("result") != "ok":
+        return []
+
+    base_url = (payload.get("baseUrl") or "").rstrip("/")
+    ch_obj = payload.get("chapter") or {}
+    ch_hash = (ch_obj.get("hash") or "").strip()
+    # Використовуємо саме 'data' (оригінали без стиснення), а не 'dataSaver'
+    files = ch_obj.get("data") or []
+
+    if not base_url or not ch_hash or not isinstance(files, list) or not files:
+        return []
+
+    images = [f"{base_url}/data/{ch_hash}/{fname}" for fname in files if fname]
+    if images:
+        log(tr("log_mangadex_api_pages", count=len(images)), "success")
+        if on_total_pages:
+            on_total_pages(len(images))
+        if on_new_image:
+            for idx, img_url in enumerate(images, 1):
+                if stop_event and stop_event.is_set():
+                    break
+                on_new_image(idx, img_url)
+
+    return images
 
 
 # ==============================================================================
@@ -1620,7 +1954,16 @@ def _extract_images_senkuro(
 # МАРШРУТИЗАЦІЯ ТА ЗАВАНТАЖЕННЯ
 # ==============================================================================
 
-def extract_chapters_from_main_page(page, url: str, on_log=None, stop_event: threading.Event | None = None):
+def extract_chapters_from_main_page(
+    page,
+    url: str,
+    on_log=None,
+    stop_event: threading.Event | None = None,
+    session: requests.Session | None = None
+):
+    if is_mangadex_site(url):
+        active_session = session or create_http_session(page, urlparse(url).netloc or "mangadex.org")
+        return _extract_chapters_mangadex(active_session, url, on_log=on_log, stop_event=stop_event)
     if is_senkuro_site(url):
         return _extract_chapters_senkuro(page, url, on_log=on_log, stop_event=stop_event)
     if is_madara_site(url):
@@ -1634,8 +1977,19 @@ def extract_images_from_reader(
     on_new_image=None,
     on_total_pages=None,
     on_log=None,
-    stop_event: threading.Event | None = None
+    stop_event: threading.Event | None = None,
+    session: requests.Session | None = None
 ):
+    if is_mangadex_site(url):
+        active_session = session or create_http_session(page, urlparse(url).netloc or "mangadex.org")
+        return _extract_images_mangadex(
+            active_session,
+            url,
+            on_new_image=on_new_image,
+            on_total_pages=on_total_pages,
+            on_log=on_log,
+            stop_event=stop_event
+        )
     if is_senkuro_site(url):
         return _extract_images_senkuro(
             page,
@@ -1728,6 +2082,13 @@ def parse_slugs(url: str):
     parsed = urlparse(url)
     parts = [p for p in parsed.path.strip('/').split('/') if p]
 
+    if is_mangadex_site(url):
+        ch_id = _extract_mangadex_uuid(url, "chapter")
+        if ch_id:
+            return "mangadex", f"id-{ch_id[:8]}"
+        manga_slug = parts[2] if len(parts) >= 3 and parts[0].lower() == "title" else (parts[1] if len(parts) >= 2 else "mangadex")
+        return sanitize_folder_name(manga_slug), "chapter"
+
     if is_senkuro_site(url):
         manga_slug = parts[1] if len(parts) > 1 and parts[0].lower() == 'manga' else (parts[0] if parts else "manga")
         ch_id = parts[3] if len(parts) > 3 and parts[2].lower() == 'chapters' else "chapter"
@@ -1761,6 +2122,7 @@ def download_single_chapter(
     base_save_dir: str,
     branch_folder: str = "",
     chapter_slug_override: str = "",
+    manga_slug_override: str = "",
     on_total_pages=None,
     on_page_done=None,
     on_log=None,
@@ -1770,8 +2132,23 @@ def download_single_chapter(
         if on_log:
             on_log(msg, level)
 
+    active_session = session or create_http_session(page, urlparse(ch_url).netloc or "mangadex.org")
+
     manga_slug, parsed_chapter_slug = parse_slugs(ch_url)
+    if manga_slug_override:
+        manga_slug = sanitize_folder_name(manga_slug_override)
     chapter_slug = chapter_slug_override or parsed_chapter_slug
+
+    if is_mangadex_site(ch_url) and (not manga_slug_override or not chapter_slug_override):
+        resolved_manga, resolved_ch = _resolve_mangadex_chapter_meta(
+            active_session,
+            ch_url,
+            stop_event=stop_event
+        )
+        if not manga_slug_override:
+            manga_slug = resolved_manga
+        if not chapter_slug_override:
+            chapter_slug = resolved_ch
 
     def resolve_save_dir(current_ch_slug: str) -> str:
         if branch_folder:
@@ -1830,7 +2207,7 @@ def download_single_chapter(
                 notify_progress()
             executor.submit(
                 download_image,
-                session,
+                active_session,
                 img_url,
                 save_dir,
                 idx,
@@ -1845,7 +2222,8 @@ def download_single_chapter(
                 on_new_image=handle_new_image,
                 on_total_pages=handle_total_pages,
                 on_log=on_log,
-                stop_event=stop_event
+                stop_event=stop_event,
+                session=active_session
             )
         except PermissionError as e:
             log(tr("log_perm_err", err=e), "error")
