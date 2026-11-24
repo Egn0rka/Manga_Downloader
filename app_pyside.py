@@ -235,7 +235,7 @@ class BrowserWorker(QThread):
     def _ensure_browser_and_auth(self, url: str) -> bool:
         domain = urlparse(url).netloc
 
-        if self.page is None:
+        if self.page is None and not core.is_mangadex_site(url):
             self.page = core.init_browser(on_log=self.log_signal.emit)
 
         if core.requires_age_verification(url) and domain not in self.auth_confirmed_domains:
@@ -323,9 +323,11 @@ class BrowserWorker(QThread):
             self.page,
             url,
             on_log=self.log_signal.emit,
-            stop_event=self.stop_event
+            stop_event=self.stop_event,
+            session=self.session
         )
-        self._refresh_session_cookies(url)
+        if not core.is_mangadex_site(url):
+            self._refresh_session_cookies(url)
 
         if self.stop_event.is_set():
             self.task_finished.emit("stopped")
@@ -428,8 +430,8 @@ class BrowserWorker(QThread):
             )
 
             branch_folder = team_display if separate_by_branch else ""
-            chapter_slug_override = ""
-            if core.is_senkuro_site(ch["url"]) and ch.get("vol") not in ("", "?") and ch.get("num") not in ("", "?"):
+            chapter_slug_override = ch.get("chapter_slug", "")
+            if not chapter_slug_override and core.is_senkuro_site(ch["url"]) and ch.get("vol") not in ("", "?") and ch.get("num") not in ("", "?"):
                 chapter_slug_override = f"v{ch['vol']}-c{ch['num']}"
 
             result = core.download_single_chapter(
@@ -439,6 +441,7 @@ class BrowserWorker(QThread):
                 save_dir,
                 branch_folder=branch_folder,
                 chapter_slug_override=chapter_slug_override,
+                manga_slug_override=ch.get("manga_slug", ""),
                 on_total_pages=lambda tot: self.page_progress.emit(0, tot),
                 on_page_done=lambda done, tot: self.page_progress.emit(done, tot),
                 on_log=self.log_signal.emit,
